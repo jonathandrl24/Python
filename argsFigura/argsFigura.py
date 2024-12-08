@@ -35,5 +35,6 @@ while True:
             area(idx, float(input("Ingrese el radio del circulo: ")))
         else:
             print("Ingrese una figura valida")
+            
     except ValueError:
         print("valor incorrecto")
