@@ -1,0 +1,1 @@
+{'juan': {'matematicas': 70.0, 'fisica': 65.0, 'español': 80.0}, 'ana': {'matematicas': 90.0, 'fisica': 100.0, 'español': 87.0}, 'jon': {'mate': 10.0, 'quimica': 40.0, 'fisica': 10.0}, 'luis': {'ujjhk': 87.0, 'hjfcn': 88.0, 'vhgf': 35.0}, 'ALBERTO': {'FISICA': 100.0, 'QUIMICA': 87.0}, 'Juan': {'matematicas': 98.0, 'español': 65.0, 'fisica': 87.0}}
