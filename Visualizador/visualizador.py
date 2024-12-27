@@ -208,11 +208,11 @@ class AudioVisualizer:
     def _draw_dark_point(self, pos: Tuple[int, int], i: int, total_points: int, 
                         amplitude: float, spiral_offset: float):
         color = colorsys.hsv_to_rgb(
-            (self.hue_offset + (i / total_points) + spiral_offset * 155) % 1.0,
+            (self.hue_offset + (i / total_points) + spiral_offset) % 1.0,
             0.3,
             0.2 if random.random() > 0.3 else 0
         )
-        color = tuple(int(c) for c in color)
+        color = tuple(int(c * 155) for c in color)
         pygame.draw.circle(self.screen, color, pos, int(5 + amplitude * 15), 0)
 
     def _draw_lightning_bolts(self, fft_data: np.ndarray):
