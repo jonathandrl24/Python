@@ -96,6 +96,12 @@ class AudioVisualizer:
         pygame.init()
         
         self.screen = pygame.display.set_mode((self.config.width, self.config.height))
+        self.blur_surface = pygame.Surface((self.config.width, self.config.height), pygame.SRCALPHA)
+        self.blur_scale = 4  
+        self.small_surface = pygame.Surface(
+            (self.config.width // self.blur_scale, self.config.height // self.blur_scale), 
+            pygame.SRCALPHA
+        )
         pygame.display.set_caption("Audio Visualizer")
         self.clock = pygame.time.Clock()
         
@@ -112,6 +118,16 @@ class AudioVisualizer:
         self.bass_freq_range = self.config.bass_freq_range
         
         
+    def apply_fast_blur(self, surface: pygame.Surface) -> pygame.Surface:
+        small_surface = pygame.transform.smoothscale(
+            surface, 
+            (surface.get_width() // self.blur_scale, surface.get_height() // self.blur_scale)
+        )
+        return pygame.transform.smoothscale(
+            small_surface, 
+            (surface.get_width(), surface.get_height())
+        )
+     
     def detect_beat(self, fft_data: np.ndarray) -> Tuple[bool, float]:
         bass_range = slice(self.config.bass_freq_range[0], 
                          min(self.config.bass_freq_range[1], len(fft_data)))
@@ -153,17 +169,27 @@ class AudioVisualizer:
         fft_data = np.abs(np.fft.rfft(audio_data)) / self.config.chunk_size
         return fft_data / np.max(fft_data) if np.max(fft_data) > 0 else np.zeros_like(fft_data)
 
+
     def draw_frame(self, fft_data: np.ndarray):
-        self._draw_background()
-        self._draw_glow_effect()
-        self._draw_spirals(fft_data)
-        self._draw_lightning_bolts(fft_data)
+        self.blur_surface.fill((0, 0, 0, 0))
+        self.small_surface.fill((0, 0, 0, 0))
+        
+        self._draw_background(self.blur_surface)
+        self._draw_glow_effect(self.blur_surface)
+        self._draw_spirals(fft_data, self.blur_surface)
+        
+        # Aplicar blur
+        blurred = self.apply_fast_blur(self.blur_surface)
+        
+        self.screen.blit(blurred, (0, 0))
+        self._draw_lightning_bolts(fft_data)  
         
         self.hue_offset = (self.hue_offset + 0.005) % 1.0
         self.time += 0.05
         pygame.display.flip()
 
-    def _draw_background(self):
+
+    def _draw_background(self, surface: pygame.Surface):
         background_hue = (self.hue_offset + 10) % 10.0
         bg_color = colorsys.hsv_to_rgb(
             background_hue, 
@@ -171,24 +197,26 @@ class AudioVisualizer:
             self.config.background_darkness
         )
         bg_color = tuple(int(c * 255) for c in bg_color)
-        self.screen.fill(bg_color)
+        surface.fill(bg_color)
 
-    def _draw_glow_effect(self):
-        surface = pygame.Surface((self.config.width, self.config.height), pygame.SRCALPHA)
-        surface.fill((0, 0, 0, 10))
-        self.screen.blit(surface, (0, 0))
+    def _draw_glow_effect(self, surface: pygame.Surface):
+        temp = pygame.Surface((self.config.width, self.config.height), pygame.SRCALPHA)
+        temp.fill((0, 0, 0, 10))
+        surface.blit(temp, (0, 0))
 
-    def _draw_spirals(self, fft_data: np.ndarray):
+    def _draw_spirals(self, fft_data: np.ndarray, surface: pygame.Surface):
         center = (self.config.width // 2, self.config.height // 2)
         max_radius = min(self.config.width, self.config.height) // 2.1
         
         self._draw_spiral_type(fft_data, center, max_radius, 
-                             self.config.num_bright_spirals, bright=True)
+                             self.config.num_bright_spirals, True, surface)
         self._draw_spiral_type(fft_data, center, max_radius, 
-                             self.config.num_dark_spirals, bright=False)
-
+                             self.config.num_dark_spirals, False, surface)
+        
+        
     def _draw_spiral_type(self, fft_data: np.ndarray, center: Tuple[int, int], 
-                         max_radius: float, num_spirals: int, bright: bool):
+                         max_radius: float, num_spirals: int, bright: bool, 
+                         surface: pygame.Surface):
         row_spacing = max_radius // (num_spirals // 2)
         for spiral in range(num_spirals):
             spiral_offset = (spiral * row_spacing * (1.5 if bright else 3))
@@ -196,18 +224,18 @@ class AudioVisualizer:
                 spiral_offset += row_spacing * self.config.num_bright_spirals
             
             radius = max_radius + spiral_offset
-            self._draw_single_spiral(fft_data, center, radius, spiral_offset, bright)
+            self._draw_single_spiral(fft_data, center, radius, spiral_offset, bright, surface)
 
     def _draw_single_spiral(self, fft_data: np.ndarray, center: Tuple[int, int], 
-                          radius: float, spiral_offset: float, bright: bool):
+                          radius: float, spiral_offset: float, bright: bool, surface: pygame.Surface):
         for i, amplitude in enumerate(fft_data):
             angle = (i * (360 / len(fft_data))) + (self.hue_offset * 360) + spiral_offset * 0.5
             pos = self._calculate_point_position(center, angle, amplitude * radius)
             
             if bright:
-                self._draw_bright_point(pos, i, len(fft_data), amplitude, spiral_offset)
+                self._draw_bright_point(pos, i, len(fft_data), amplitude, spiral_offset, surface)
             else:
-                self._draw_dark_point(pos, i, len(fft_data), amplitude, spiral_offset)
+                self._draw_dark_point(pos, i, len(fft_data), amplitude, spiral_offset, surface)
 
     def _calculate_point_position(self, center: Tuple[int, int], angle: float, 
                                 radius: float) -> Tuple[int, int]:
@@ -218,7 +246,7 @@ class AudioVisualizer:
         )
 
     def _draw_bright_point(self, pos: Tuple[int, int], i: int, total_points: int, 
-                      amplitude: float, spiral_offset: float):
+                          amplitude: float, spiral_offset: float, surface: pygame.Surface):
         color = colorsys.hsv_to_rgb(
             (self.hue_offset + (i / total_points) + spiral_offset) % 1.0,
             1,
@@ -227,17 +255,18 @@ class AudioVisualizer:
         color = tuple(int(c * 255) for c in color)      
         
         core_color = tuple(min(c + 100, 255) for c in color)
-        pygame.draw.circle(self.screen, core_color, pos, int(15 + amplitude * 50), 0)
+        pygame.draw.circle(surface, core_color, pos, int(15 + amplitude * 50), 0)
 
     def _draw_dark_point(self, pos: Tuple[int, int], i: int, total_points: int, 
-                        amplitude: float, spiral_offset: float):
+                        amplitude: float, spiral_offset: float, surface: pygame.Surface):
         color = colorsys.hsv_to_rgb(
             (self.hue_offset + (i / total_points) + spiral_offset) % 1.0,
             0.3,
             0.2 if random.random() > 0.3 else 0
         )
         color = tuple(int(c * 115) for c in color)
-        pygame.draw.circle(self.screen, color, pos, int(5 + amplitude * 15), 0)
+        pygame.draw.circle(surface, color, pos, int(5 + amplitude * 15), 0)
+
 
     def _draw_lightning_bolts(self, fft_data: np.ndarray):
         is_beat, intensity = self.detect_beat(fft_data)
@@ -319,5 +348,5 @@ def generate_lightning_points(start_pos: Tuple[int, int], end_pos: Tuple[int, in
     return points
 
 if __name__ == "__main__":
-    visualizer = AudioVisualizer("yesterday-vs self.wav")
+    visualizer = AudioVisualizer("sleepwalker(Ultra Slowed).wav")
     visualizer.run()
