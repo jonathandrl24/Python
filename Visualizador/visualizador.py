@@ -3,216 +3,309 @@ import numpy as np
 import wave
 import colorsys
 import random
+from dataclasses import dataclass
+from typing import List, Tuple, Optional
 
-AUDIO_FILE = "music.wav"
 
-pygame.mixer.init()
-pygame.init()
+@dataclass
+class VisualizerConfig:
+    """Configuration settings for the visualizer"""
+    width: int = 800
+    height: int = 765
+    chunk_size: int = 512
+    fps: int = 150
+    num_bright_spirals: int = 15
+    num_dark_spirals: int = 15
+    background_darkness: float = 0.2
+    background_saturation: float = 1
 
-# Screen settings
-WIDTH, HEIGHT = 800, 765
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Audio Visualizer")
-clock = pygame.time.Clock()
-
-# Audio settings
-pygame.mixer.music.load(AUDIO_FILE)
-pygame.mixer.music.play()
-wave_file = wave.open(AUDIO_FILE, 'rb')
-CHUNK = 512
-
-# Ray settings
-class SpiralRay:
-    def __init__(self, base_angle):
-        self.base_angle = base_angle
-        self.rotation_speed = random.uniform(1, 3)
-        self.length = random.randint(200, 400)
-        self.lifetime = random.randint(30, 60)
-        self.width = random.uniform(3, 8)
-        self.hue = random.random()
-        self.hue_speed = random.uniform(0.01, 0.03)
+class LightningBolt:
+    def __init__(self, angle: float):
+        self.angle = angle
+        self.length = random.randint(900, 1000)  # Increased length range
+        self.lifetime = random.randint(5, 15)   # Shorter lifetime for more dramatic effect
+        self.width = random.uniform(0.3, 0.5)       # Increased width range
         self.alpha = 255
-        self.segments = 8  # Number of segments in the ray
-        self.wave_amplitude = random.uniform(10, 30)
-        self.wave_frequency = random.uniform(0.1, 0.3)
+        self.branches = self._generate_branches()
+        self.flicker_state = random.random()    # Add flickering effect
+        self.color = self._generate_color()     # Randomize color slightly
 
-    def update(self):
+    def _generate_color(self) -> Tuple[int, int, int]:
+        """Generate slightly randomized lightning color"""
+        base_color = (217, 217, 217)  # Base blue-white color
+        variation = random.randint(-100, 100)
+        return tuple(max(0, min(255, c + variation)) for c in base_color)
+
+    def _generate_branches(self) -> List[Tuple[float, float, float]]:
+        """Generate more dynamic branch patterns"""
+        branches = []
+        num_branches = random.randint(1, 2)  # More branches
+        
+        # Create primary branches
+        for _ in range(num_branches):
+            angle_variance = random.uniform(-360, 360)  # Increased angle variance
+            branches.append((
+                self.angle + angle_variance,
+                self.length * random.uniform(0.7, 0.8),  # Longer branches
+                random.uniform(0.1, 0.9)  # More varied start positions
+            ))
+        
+        return branches
+
+    def update(self) -> bool:
+        """Update lightning state with flickering"""
         self.lifetime -= 1
-        self.alpha = (self.lifetime * 255) // 60
-        self.hue = (self.hue + self.hue_speed) % 1.0
+        self.flicker_state = random.random()
+        self.alpha = int((self.lifetime * 255) // 15 * (0.7 + 0.3 * self.flicker_state))
         return self.lifetime > 0
 
-    def draw(self, screen, center_x, center_y, intensity, time):
-        if self.lifetime <= 0:
-            return
+    def _draw_lightning_segment(self, surface: pygame.Surface, start_pos: Tuple[int, int], 
+                              end_pos: Tuple[int, int], is_branch: bool = False):
+        """Draw enhanced lightning segment with more detail"""
+        points = generate_lightning_points(start_pos, end_pos, 
+                                        num_segments=6 if is_branch else 10)
         
-        # Calculate points along the spiral ray
-        points = []
-        current_angle = self.base_angle + time * self.rotation_speed
+        # Core lightning
+        core_color = (*self.color, self.alpha)
         
-        for i in range(self.segments + 1):
-            segment_length = (i / self.segments) * self.length * intensity
-            # Add wave effect
-            wave_offset = np.sin(time * 2 + i * self.wave_frequency) * self.wave_amplitude
-            angle_rad = np.radians(current_angle + wave_offset)
+        # Multiple layers for more dramatic effect
+        layers = 3 if is_branch else 4
+        for layer in range(layers):
+            width = (self.width * (0.6 if is_branch else 1.0)) * (5 - layer)
+            alpha = int(self.alpha * (0.8 ** layer) * self.flicker_state)
+            current_color = (*self.color, alpha)
             
-            x = center_x + np.cos(angle_rad) * segment_length
-            y = center_y + np.sin(angle_rad) * segment_length
-            points.append((int(x), int(y)))
+            # Draw main segment
+            for i in range(len(points) - 1):
+                pygame.draw.line(surface, current_color,
+                               points[i], points[i + 1],
+                               int(width))
+                
+                # Add small random offshoots for extra detail
+                if not is_branch and random.random() < 0.2:
+                    offset = random.uniform(-20, 20)
+                    offshoot_end = (
+                        int(points[i][0] + offset),
+                        int(points[i][1] + offset)
+                    )
+                    pygame.draw.line(surface, current_color,
+                                   points[i], offshoot_end,
+                                   int(width * 0.5))
 
-        # Create surface for the ray
-        ray_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+class AudioVisualizer:
+    def __init__(self, audio_file: str, config: Optional[VisualizerConfig] = None):
+        self.config = config or VisualizerConfig()
+        pygame.mixer.init()
+        pygame.init()
         
-        # Draw the main ray with gradient color
-        color = colorsys.hsv_to_rgb(self.hue, 0.9, 1)
+        self.screen = pygame.display.set_mode((self.config.width, self.config.height))
+        pygame.display.set_caption("Audio Visualizer")
+        self.clock = pygame.time.Clock()
+        
+        self._setup_audio(audio_file)
+        self.spiral_rays: List[LightningBolt] = []
+        self.hue_offset = 0.0
+        self.time = 0
+        
+    def _setup_audio(self, audio_file: str):
+        """Initialize audio playback and wave file reading"""
+        pygame.mixer.music.load(audio_file)
+        pygame.mixer.music.play()
+        self.wave_file = wave.open(audio_file, 'rb')
+
+    def get_fft_data(self) -> np.ndarray:
+        """Get normalized FFT data from audio"""
+        data = self.wave_file.readframes(self.config.chunk_size)
+        if len(data) < self.config.chunk_size * self.wave_file.getsampwidth():
+            self.wave_file.rewind()
+            data = self.wave_file.readframes(self.config.chunk_size)
+            
+        audio_data = np.frombuffer(data, dtype=np.int16)
+        fft_data = np.abs(np.fft.rfft(audio_data)) / self.config.chunk_size
+        return fft_data / np.max(fft_data) if np.max(fft_data) > 0 else np.zeros_like(fft_data)
+
+    def draw_frame(self, fft_data: np.ndarray):
+        """Draw a single frame of the visualization"""
+        self._draw_background()
+        self._draw_glow_effect()
+        self._draw_spirals(fft_data)
+        self._draw_lightning_bolts(fft_data)
+        
+        self.hue_offset = (self.hue_offset + 0.005) % 1.0
+        self.time += 0.05
+        pygame.display.flip()
+
+    def _draw_background(self):
+        """Draw dynamic background"""
+        background_hue = (self.hue_offset + 10) % 10.0
+        bg_color = colorsys.hsv_to_rgb(
+            background_hue, 
+            self.config.background_saturation,
+            self.config.background_darkness
+        )
+        bg_color = tuple(int(c * 255) for c in bg_color)
+        self.screen.fill(bg_color)
+
+    def _draw_glow_effect(self):
+        """Add trailing glow effect"""
+        surface = pygame.Surface((self.config.width, self.config.height), pygame.SRCALPHA)
+        surface.fill((0, 0, 0, 10))
+        self.screen.blit(surface, (0, 0))
+
+    def _draw_spirals(self, fft_data: np.ndarray):
+        """Draw spiral visualizations"""
+        center = (self.config.width // 2, self.config.height // 2)
+        max_radius = min(self.config.width, self.config.height) // 1.7
+        
+        self._draw_spiral_type(fft_data, center, max_radius, 
+                             self.config.num_bright_spirals, bright=True)
+        self._draw_spiral_type(fft_data, center, max_radius, 
+                             self.config.num_dark_spirals, bright=False)
+
+    def _draw_spiral_type(self, fft_data: np.ndarray, center: Tuple[int, int], 
+                         max_radius: float, num_spirals: int, bright: bool):
+        row_spacing = max_radius // (num_spirals // 2)
+        for spiral in range(num_spirals):
+            spiral_offset = (spiral * row_spacing * (1.5 if bright else 3))
+            if not bright:
+                spiral_offset += row_spacing * self.config.num_bright_spirals
+            
+            radius = max_radius + spiral_offset
+            self._draw_single_spiral(fft_data, center, radius, spiral_offset, bright)
+
+    def _draw_single_spiral(self, fft_data: np.ndarray, center: Tuple[int, int], 
+                          radius: float, spiral_offset: float, bright: bool):
+        for i, amplitude in enumerate(fft_data):
+            angle = (i * (360 / len(fft_data))) + (self.hue_offset * 360) + spiral_offset * 0.5
+            pos = self._calculate_point_position(center, angle, amplitude * radius)
+            
+            if bright:
+                self._draw_bright_point(pos, i, len(fft_data), amplitude, spiral_offset)
+            else:
+                self._draw_dark_point(pos, i, len(fft_data), amplitude, spiral_offset)
+
+    def _calculate_point_position(self, center: Tuple[int, int], angle: float, 
+                                radius: float) -> Tuple[int, int]:
+        radians = np.radians(angle)
+        return (
+            int(center[0] + radius * np.cos(radians)),
+            int(center[1] + radius * np.sin(radians))
+        )
+
+    def _draw_bright_point(self, pos: Tuple[int, int], i: int, total_points: int, 
+                          amplitude: float, spiral_offset: float):
+        color = colorsys.hsv_to_rgb(
+            (self.hue_offset + (i / total_points) + spiral_offset) % 1.0,
+            1,
+            min(amplitude * 1.5, 1)
+        )
         color = tuple(int(c * 255) for c in color)
         
-        # Draw segments with glow effect
-        for i in range(len(points) - 1):
-            start = points[i]
-            end = points[i + 1]
-            
-            # Gradient alpha for fading towards the end
-            segment_alpha = int(self.alpha * (1 - i/self.segments))
-            
-            # Draw multiple layers for glow effect
-            for glow in range(3):
-                glow_width = self.width * (3 - glow)
-                glow_alpha = segment_alpha // (glow + 2)
-                pygame.draw.line(ray_surface, (*color, glow_alpha),
-                               start, end, int(glow_width))
+        glow_radius = int(15 + amplitude * 50)
+        glow_color = tuple(min(c + 50, 255) for c in color) + (150,)
+        pygame.draw.circle(self.screen, glow_color, pos, glow_radius, 0)
+
+    def _draw_dark_point(self, pos: Tuple[int, int], i: int, total_points: int, 
+                        amplitude: float, spiral_offset: float):
+        color = colorsys.hsv_to_rgb(
+            (self.hue_offset + (i / total_points) + spiral_offset * 155) % 1.0,
+            0.3,
+            0.2 if random.random() > 0.3 else 0
+        )
+        color = tuple(int(c) for c in color)
+        pygame.draw.circle(self.screen, color, pos, int(5 + amplitude * 15), 0)
+
+    def _draw_lightning_bolts(self, fft_data: np.ndarray):
+        """Draw and update lightning effects"""
+        intensity = np.mean(fft_data) * 1.5  # Calculate intensity from FFT data
+
+        # Add new lightning bolts based on audio intensity
+        if random.random() < intensity * 0.3:
+            for _ in range(random.randint(1, 3)):  # Spawn 1 to 3 new bolts
+                angle = random.uniform(0, 360)  # Random angle for the lightning
+                self.spiral_rays.append(LightningBolt(angle))
+
+        # Update and draw each lightning bolt
+        center = (self.config.width // 2, self.config.height // 2)
+        self.spiral_rays = [bolt for bolt in self.spiral_rays if bolt.update()]
+        for bolt in self.spiral_rays:
+            for branch in bolt.branches:
+                branch_angle, branch_length, branch_start = branch
+
+                # Calculate start and end positions
+                start_pos = center
+                branch_radians = np.radians(branch_angle)
+                end_pos = (
+                    int(start_pos[0] + branch_length * np.cos(branch_radians)),
+                    int(start_pos[1] + branch_length * np.sin(branch_radians))
+                )
+
+                # Draw the main lightning segment
+                bolt._draw_lightning_segment(self.screen, start_pos, end_pos, is_branch=True)
+
+    def run(self):
+        """Main visualization loop"""
+        try:
+            running = True
+            while running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+
+                fft_data = self.get_fft_data()
+                if fft_data is None:
+                    break
+
+                self.draw_frame(fft_data)
+                self.clock.tick(self.config.fps)
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        self.wave_file.close()
+        pygame.mixer.quit()
+        pygame.quit()
+
+def generate_lightning_points(start_pos: Tuple[int, int], end_pos: Tuple[int, int], 
+                            num_segments: int = 10) -> List[Tuple[int, int]]:
+    """Generate more jagged and realistic lightning points"""
+    points = [start_pos]
+    start_x, start_y = start_pos
+    end_x, end_y = end_pos
+    
+    # Calculate main direction
+    dx = end_x - start_x
+    dy = end_y - start_y
+    dist = np.sqrt(dx*dx + dy*dy)
+    
+    for i in range(num_segments):
+        progress = (i + 1) / (num_segments + 1)
         
-        screen.blit(ray_surface, (0, 0))
-
-spiral_rays = []
-
-def get_fft_data():
-    """Fetch audio data and compute FFT."""
-    data = wave_file.readframes(CHUNK)
-    if len(data) < CHUNK * wave_file.getsampwidth():
-        wave_file.rewind()
-        data = wave_file.readframes(CHUNK)
-    audio_data = np.frombuffer(data, dtype=np.int16)
-    fft_data = np.abs(np.fft.rfft(audio_data)) / CHUNK
-    return fft_data / np.max(fft_data) if np.max(fft_data) > 0 else np.zeros_like(fft_data)
-
-def draw_background(hue_offset):
-    """Draw an even darker dynamic background that changes color gradually."""
-    background_hue = (hue_offset + 0.2) % 1.0
-    bg_color = colorsys.hsv_to_rgb(background_hue, 0.1, 0.02)
-    bg_color = tuple(int(c * 255) for c in bg_color)
-    surface = pygame.Surface((WIDTH, HEIGHT))
-    surface.fill(bg_color)
-    screen.blit(surface, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
-
-def draw_spiral_rays(fft_data, time):
-    """Draw and update spiral rays."""
-    # Calculate overall audio intensity
-    intensity = np.mean(fft_data) * 1.5
-    
-    # Spawn new rays based on audio intensity
-    if random.random() < intensity * 0.2:  # Adjust 0.2 to control ray frequency
-        # Create rays at regular angular intervals
-        for angle in range(0, 360, 45):  # Adjust step for more/fewer rays
-            spiral_rays.append(SpiralRay(angle))
-    
-    # Update and draw existing rays
-    center_x, center_y = WIDTH // 2, HEIGHT // 2
-    spiral_rays[:] = [ray for ray in spiral_rays if ray.update()]
-    for ray in spiral_rays:
-        ray.draw(screen, center_x, center_y, intensity, time)
-
-def draw_spirals(fft_data, num_bright_spirals, num_dark_spirals, hue_offset):
-    """Draw bright and dark spirals separately with gaps between them."""
-    center_x, center_y = WIDTH // 2, HEIGHT // 2
-    max_radius = min(WIDTH, HEIGHT) // 1.7
-
-    row_spacing = max_radius // (num_bright_spirals // 2)
-    
-    # Bright spirals
-    for spiral in range(num_bright_spirals):
-        spiral_offset = spiral * row_spacing * 1.5
-        radius = (max_radius + spiral_offset)
-
-        for i in range(len(fft_data)):
-            amplitude = fft_data[i] * radius
-            angle = (i * (360 / len(fft_data))) + (hue_offset * 360) + spiral_offset * 0.5
-            radians = np.radians(angle)
-            x = int(center_x + amplitude * np.cos(radians))
-            y = int(center_y + amplitude * np.sin(radians))
-
-            color = colorsys.hsv_to_rgb(
-                (hue_offset + (i / len(fft_data)) + spiral_offset) % 1.0,
-                1,
-                min(fft_data[i] * 1.5, 1)
-            )
-            color = tuple(int(c * 255) for c in color)
+        # More pronounced zigzag effect
+        zigzag_amount = (1 - progress) * dist * 0.2
+        
+        # Main position along the line
+        straight_x = start_x + dx * progress
+        straight_y = start_y + dy * progress
+        
+        # Add randomized offset
+        angle = random.uniform(0, 2 * np.pi)
+        offset = random.uniform(-zigzag_amount, zigzag_amount)
+        x = straight_x + np.cos(angle) * offset
+        y = straight_y + np.sin(angle) * offset
+        
+        # Add some randomized intermediate points for more detail
+        if random.random() < 0.3:
+            mid_x = (points[-1][0] + x) / 2 + random.uniform(-20, 20)
+            mid_y = (points[-1][1] + y) / 2 + random.uniform(-20, 20)
+            points.append((int(mid_x), int(mid_y)))
             
-            glow_radius = int(15 + fft_data[i] * 50)
-            glow_color = (
-                min(color[0] + 50, 255),
-                min(color[1] + 50, 255),
-                min(color[2] + 50, 255),
-                150
-            )
-            pygame.draw.circle(screen, glow_color, (x, y), glow_radius, 0)
+        points.append((int(x), int(y)))
+    
+    points.append(end_pos)
+    return points
 
-    # Dark spirals
-    dark_row_spacing = max_radius // (num_dark_spirals // 2)
-    for spiral in range(num_dark_spirals):
-        spiral_offset = (spiral * dark_row_spacing * 3) + (row_spacing * num_bright_spirals)
-        radius = (max_radius + spiral_offset)
-
-        for i in range(len(fft_data)):
-            amplitude = fft_data[i] * radius
-            angle = (i * (360 / len(fft_data))) + (hue_offset * 360) + spiral_offset * 0.5
-            radians = np.radians(angle)
-            x = int(center_x + amplitude * np.cos(radians))
-            y = int(center_y + amplitude * np.sin(radians))
-
-            color = colorsys.hsv_to_rgb(
-                (hue_offset + (i / len(fft_data)) + spiral_offset) % 1.0,
-                0.3,
-                0.2 if np.random.rand() > 0.3 else 0
-            )
-            color = tuple(int(c * 255) for c in color)
-            
-            pygame.draw.circle(screen, color, (x, y), int(5 + fft_data[i] * 15), 0)
-
-def draw_glow_effect():
-    """Create a trailing glow effect."""
-    surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    surface.fill((0, 0, 0, 10))  # Increased alpha for longer trails
-    screen.blit(surface, (0, 0))
-
-# Main loop
-running = True
-hue_offset = 0.0
-num_bright_spirals = 15
-num_dark_spirals = 15
-time = 0
-
-try:
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-
-        fft_data = get_fft_data()
-        if fft_data is None:
-            break
-
-        # Draw background and visualizations
-        draw_background(hue_offset)
-        draw_glow_effect()
-        draw_spirals(fft_data, num_bright_spirals, num_dark_spirals, hue_offset)
-        draw_spiral_rays(fft_data, time)
-
-        hue_offset = (hue_offset + 0.005) % 1.0
-        time += 0.05
-        pygame.display.flip()
-        clock.tick(150)
-finally:
-    wave_file.close()
-    pygame.mixer.quit()
-    pygame.quit()
+if __name__ == "__main__":
+    visualizer = AudioVisualizer("music.wav")
+    visualizer.run()
