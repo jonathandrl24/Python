@@ -24,19 +24,22 @@ class VisualizerConfig:
 
 
 class LightningBolt:
-    def __init__(self, angle: float, intensity: float = 1.0):
+    def __init__(self, angle: float, intensity: float = 1.0, screen_size: Tuple[int, int] = (900, 865)):
         self.angle = angle
-        self.length = random.randint(900, 1000)
+        # Scale length based on screen size
+        max_length = min(screen_size[0], screen_size[1] * 1)  # Use 60% of screen size
+        self.length = random.randint(int(max_length), int(max_length))
         self.lifetime = random.randint(5, 15)
-        self.width = random.uniform(0.2, 0.4) * intensity  
-        self.alpha = 255 * intensity  # Brillo
+        self.width = random.uniform(0.15, 0.25) * intensity
+        self.alpha = 255 * intensity
         self.branches = self._generate_branches(intensity)
         self.flicker_state = random.random()
         self.color = self._generate_color(intensity)
 
+
     def _generate_color(self, intensity: float) -> Tuple[int, int, int]:
         base_color = (217, 217, 217)
-        variation = random.randint(-20, 20)
+        variation = random.randint(-100, 100)
         color = tuple(max(0, min(255, int((c + variation) * intensity))) for c in base_color)
         return color
 
@@ -46,11 +49,12 @@ class LightningBolt:
         num_branches = random.randint(2, 3 if intensity > 1.5 else 2)
         
         for _ in range(num_branches):
-            angle_variance = random.uniform(-60, 60) * intensity
+            # Reduce angle variance to keep branches more contained
+            angle_variance = random.uniform(-45, 45) * intensity
             branches.append((
                 self.angle + angle_variance,
-                self.length * random.uniform(0.7, 0.9) * intensity,
-                random.uniform(0.1, 0.9)
+                self.length * random.uniform(0.5, 1) * intensity,  # Shorter branches
+                random.uniform(0.3, 0.7)  # Start branches further along main bolt
             ))
         return branches
 
@@ -95,13 +99,17 @@ class AudioVisualizer:
         pygame.mixer.init()
         pygame.init()
         
-        self.screen = pygame.display.set_mode((self.config.width, self.config.height))
-        self.blur_surface = pygame.Surface((self.config.width, self.config.height), pygame.SRCALPHA)
-        self.blur_scale = 4  
-        self.small_surface = pygame.Surface(
-            (self.config.width // self.blur_scale, self.config.height // self.blur_scale), 
-            pygame.SRCALPHA
+        # Make the window resizable
+        self.screen = pygame.display.set_mode(
+            (self.config.width, self.config.height),
+            pygame.RESIZABLE
         )
+        self.current_size = (self.config.width, self.config.height)
+        self.is_fullscreen = False
+        
+        # Create surfaces with initial size
+        self._create_surfaces()
+        
         pygame.display.set_caption("Audio Visualizer")
         self.clock = pygame.time.Clock()
         
@@ -117,6 +125,60 @@ class AudioVisualizer:
         self.beat_decay = self.config.beat_decay
         self.bass_freq_range = self.config.bass_freq_range
         
+        
+    def _create_surfaces(self):
+        """Create or recreate surfaces based on current window size"""
+        width, height = self.current_size
+        self.blur_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        self.blur_scale = 4
+        self.small_surface = pygame.Surface(
+            (width // self.blur_scale, height // self.blur_scale),
+            pygame.SRCALPHA
+        )
+        
+        
+    def _handle_resize(self, size):
+        """Handle window resize event"""
+        width, height = size
+        self.current_size = (width, height)
+        
+        # Update the display surface
+        if self.is_fullscreen:
+            self.screen = pygame.display.set_mode(
+                (width, height),
+                pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
+            )
+        else:
+            self.screen = pygame.display.set_mode(
+                (width, height),
+                pygame.RESIZABLE
+            )
+            
+        # Recreate surfaces with new size
+        self._create_surfaces()
+
+    def toggle_fullscreen(self):
+        if self.is_fullscreen:
+            # Switch to windowed mode
+            self.screen = pygame.display.set_mode(
+                self.current_size,
+                pygame.RESIZABLE
+            )
+            self.is_fullscreen = False
+        else:
+            # Get the display info for fullscreen
+            display_info = pygame.display.Info()
+            
+            # Switch to fullscreen mode
+            self.screen = pygame.display.set_mode(
+                (display_info.current_w, display_info.current_h),
+                pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
+            )
+            
+            self.current_size = (display_info.current_w, display_info.current_h)
+            self._create_surfaces()
+            
+            self.is_fullscreen = True
         
     def apply_fast_blur(self, surface: pygame.Surface) -> pygame.Surface:
         small_surface = pygame.transform.smoothscale(
@@ -205,8 +267,8 @@ class AudioVisualizer:
         surface.blit(temp, (0, 0))
 
     def _draw_spirals(self, fft_data: np.ndarray, surface: pygame.Surface):
-        center = (self.config.width // 2, self.config.height // 2)
-        max_radius = min(self.config.width, self.config.height) // 2.1
+        center = (self.current_size[0] // 2, self.current_size[1] // 2)
+        max_radius = min(self.current_size[0], self.current_size[1]) // 2.1
         
         self._draw_spiral_type(fft_data, center, max_radius, 
                              self.config.num_bright_spirals, True, surface)
@@ -239,11 +301,17 @@ class AudioVisualizer:
 
     def _calculate_point_position(self, center: Tuple[int, int], angle: float, 
                                 radius: float) -> Tuple[int, int]:
+        # Scale radius based on current window size
+        scale_factor = min(self.current_size[0] / self.config.width,
+                         self.current_size[1] / self.config.height)
+        scaled_radius = radius * scale_factor
+        
         radians = np.radians(angle)
         return (
-            int(center[0] + radius * np.cos(radians)),
-            int(center[1] + radius * np.sin(radians))
+            int(center[0] + scaled_radius * np.cos(radians)),
+            int(center[1] + scaled_radius * np.sin(radians))
         )
+
 
     def _draw_bright_point(self, pos: Tuple[int, int], i: int, total_points: int, 
                           amplitude: float, spiral_offset: float, surface: pygame.Surface):
@@ -275,20 +343,31 @@ class AudioVisualizer:
             num_bolts = random.randint(1, max(1, int(intensity)))
             for _ in range(num_bolts):
                 angle = random.uniform(0, 360)
-                self.spiral_rays.append(LightningBolt(angle, intensity))
+                # Pass current screen size to LightningBolt constructor
+                self.spiral_rays.append(LightningBolt(angle, intensity, self.current_size))
         
-        center = (self.config.width // 2, self.config.height // 2)
+        center = (self.current_size[0] // 2, self.current_size[1] // 2)
         self.spiral_rays = [bolt for bolt in self.spiral_rays if bolt.update()]
         
         for bolt in self.spiral_rays:
             for branch in bolt.branches:
                 branch_angle, branch_length, branch_start = branch
                 start_pos = center
+                
                 branch_radians = np.radians(branch_angle)
+                max_radius = min(self.current_size[0], self.current_size[1]) * 0.8  
+                scaled_length = min(branch_length, max_radius)
+                
                 end_pos = (
-                    int(start_pos[0] + branch_length * np.cos(branch_radians)),
-                    int(start_pos[1] + branch_length * np.sin(branch_radians))
+                    int(start_pos[0] + scaled_length * np.cos(branch_radians)),
+                    int(start_pos[1] + scaled_length * np.sin(branch_radians))
                 )
+                
+                end_pos = (
+                    max(0, min(end_pos[0], self.current_size[0])),
+                    max(0, min(end_pos[1], self.current_size[1]))
+                )
+                
                 bolt._draw_lightning_segment(self.screen, start_pos, end_pos, is_branch=True)
 
     def run(self):
@@ -298,6 +377,13 @@ class AudioVisualizer:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
+                    elif event.type == pygame.VIDEORESIZE and not self.is_fullscreen:
+                        self._handle_resize(event.size)
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_f:  
+                            self.toggle_fullscreen()
+                        elif event.key == pygame.K_ESCAPE and self.is_fullscreen:
+                            self.toggle_fullscreen()
 
                 fft_data = self.get_fft_data()
                 if fft_data is None:
@@ -331,15 +417,14 @@ def generate_lightning_points(start_pos: Tuple[int, int], end_pos: Tuple[int, in
         straight_x = start_x + dx * progress
         straight_y = start_y + dy * progress
         
-        # Add randomized offset
         angle = random.uniform(0, 2 * np.pi)
         offset = random.uniform(-zigzag_amount, zigzag_amount)
         x = straight_x + np.cos(angle) * offset
         y = straight_y + np.sin(angle) * offset
         
         if random.random() < 0.3:
-            mid_x = (points[-1][0] + x) / 2 + random.uniform(-20, 20)
-            mid_y = (points[-1][1] + y) / 2 + random.uniform(-20, 20)
+            mid_x = (points[-1][0] + x) / 2 + random.uniform(-100, 100)
+            mid_y = (points[-1][1] + y) / 2 + random.uniform(-100, 100)
             points.append((int(mid_x), int(mid_y)))
             
         points.append((int(x), int(y)))
@@ -348,5 +433,5 @@ def generate_lightning_points(start_pos: Tuple[int, int], end_pos: Tuple[int, in
     return points
 
 if __name__ == "__main__":
-    visualizer = AudioVisualizer("sleepwalker(Ultra Slowed).wav")
+    visualizer = AudioVisualizer("sleepwalker.wav")
     visualizer.run()
